@@ -2,13 +2,15 @@ package org.xutils.http;
 
 import android.text.TextUtils;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.xutils.common.KeyValue;
 import org.xutils.common.task.Priority;
+import org.xutils.common.util.KeyValue;
 import org.xutils.common.util.LogUtil;
 import org.xutils.http.annotation.HttpRequest;
 import org.xutils.http.app.DefaultParamsBuilder;
+import org.xutils.http.app.HttpRetryHandler;
 import org.xutils.http.app.ParamsBuilder;
 import org.xutils.http.app.RedirectHandler;
 import org.xutils.http.body.BodyItemWrapper;
@@ -27,7 +29,11 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.net.Proxy;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 
 import javax.net.ssl.SSLSocketFactory;
@@ -60,6 +66,7 @@ public class RequestParams {
     // 扩展参数
     private Proxy proxy; // 代理
     private String charset = "UTF-8";
+    private boolean useCookie = true; // 是否在请求过程中启用cookie
     private String cacheDirName; // 缓存文件夹名称
     private long cacheSize; // 缓存文件夹大小
     private long cacheMaxAge; // 默认缓存存活时间, 单位:毫秒.(如果服务没有返回有效的max-age或Expires)
@@ -123,11 +130,15 @@ public class RequestParams {
             buildUri = builder.buildUri(httpRequest);
             builder.buildParams(this);
             builder.buildSign(this, httpRequest.signs());
-            sslSocketFactory = builder.getSSLSocketFactory();
+            if (sslSocketFactory == null) {
+                sslSocketFactory = builder.getSSLSocketFactory();
+            }
         } else if (this.builder != null) {
             builder.buildParams(this);
             builder.buildSign(this, signs);
-            sslSocketFactory = builder.getSSLSocketFactory();
+            if (sslSocketFactory == null) {
+                sslSocketFactory = builder.getSSLSocketFactory();
+            }
         }
     }
 
@@ -171,6 +182,24 @@ public class RequestParams {
 
     public String getCharset() {
         return charset;
+    }
+
+    /**
+     * 是否在请求过程中启用cookie, 默认true.
+     *
+     * @return
+     */
+    public boolean isUseCookie() {
+        return useCookie;
+    }
+
+    /**
+     * 是否在请求过程中启用cookie, 默认true.
+     *
+     * @param useCookie
+     */
+    public void setUseCookie(boolean useCookie) {
+        this.useCookie = useCookie;
     }
 
     public Proxy getProxy() {
@@ -361,7 +390,9 @@ public class RequestParams {
      * @param value
      */
     public void setHeader(String name, String value) {
-        this.headers.add(new Header(name, value, true));
+        Header header = new Header(name, value, true);
+        this.headers.remove(header);
+        this.headers.add(header);
     }
 
     /**
@@ -388,16 +419,38 @@ public class RequestParams {
                 if (value instanceof File
                         || value instanceof InputStream
                         || value instanceof byte[]) {
-                    this.addBodyParameter(name, value, null);
+                    this.fileParams.add(new KeyValue(name, value));
                 } else {
-                    this.addBodyParameter(name, value.toString());
+                    if (value instanceof List) {
+                        for (Object item : (List) value) {
+                            this.bodyParams.add(new ArrayItem(name, item));
+                        }
+                    } else if (value.getClass().isArray()) {
+                        int len = Array.getLength(value);
+                        for (int i = 0; i < len; i++) {
+                            this.bodyParams.add(new ArrayItem(name, Array.get(value, i)));
+                        }
+                    } else {
+                        this.bodyParams.add(new KeyValue(name, value));
+                    }
                 }
             } else {
-                this.setBodyContent(value.toString());
+                this.bodyContent = value.toString();
             }
         } else {
             if (!TextUtils.isEmpty(name)) {
-                this.addQueryStringParameter(name, value.toString());
+                if (value instanceof List) {
+                    for (Object item : (List) value) {
+                        this.queryStringParams.add(new ArrayItem(name, item));
+                    }
+                } else if (value.getClass().isArray()) {
+                    int len = Array.getLength(value);
+                    for (int i = 0; i < len; i++) {
+                        this.queryStringParams.add(new ArrayItem(name, Array.get(value, i)));
+                    }
+                } else {
+                    this.queryStringParams.add(new KeyValue(name, value));
+                }
             }
         }
     }
@@ -409,7 +462,9 @@ public class RequestParams {
      * @param value
      */
     public void addQueryStringParameter(String name, String value) {
-        this.queryStringParams.add(new KeyValue(name, value));
+        if (!TextUtils.isEmpty(name)) {
+            this.queryStringParams.add(new KeyValue(name, value));
+        }
     }
 
     /**
@@ -419,7 +474,11 @@ public class RequestParams {
      * @param value
      */
     public void addBodyParameter(String name, String value) {
-        this.bodyParams.add(new KeyValue(name, value));
+        if (!TextUtils.isEmpty(name)) {
+            this.bodyParams.add(new KeyValue(name, value));
+        } else {
+            this.bodyContent = value;
+        }
     }
 
     /**
@@ -479,29 +538,32 @@ public class RequestParams {
     }
 
     public String getBodyContent() {
+        checkBodyParams();
         return bodyContent;
     }
 
     public List<Header> getHeaders() {
-        return headers;
+        return new ArrayList<Header>(headers);
     }
 
     public List<KeyValue> getQueryStringParams() {
         checkBodyParams();
-        return queryStringParams;
+        return new ArrayList<KeyValue>(queryStringParams);
     }
 
     public List<KeyValue> getBodyParams() {
         checkBodyParams();
-        return bodyParams;
+        return new ArrayList<KeyValue>(bodyParams);
     }
 
     public List<KeyValue> getFileParams() {
-        return fileParams;
+        checkBodyParams();
+        return new ArrayList<KeyValue>(fileParams);
     }
 
     public List<KeyValue> getStringParams() {
-        List<KeyValue> result = new ArrayList<KeyValue>();
+        List<KeyValue> result = new ArrayList<KeyValue>(
+                queryStringParams.size() + bodyParams.size());
         result.addAll(queryStringParams);
         result.addAll(bodyParams);
         return result;
@@ -525,6 +587,32 @@ public class RequestParams {
         return null;
     }
 
+    public List<KeyValue> getParams(String name) {
+        List<KeyValue> result = new ArrayList<KeyValue>();
+        for (KeyValue kv : queryStringParams) {
+            if (name == null && kv.key == null) {
+                result.add(kv);
+            } else if (name != null && name.equals(kv.key)) {
+                result.add(kv);
+            }
+        }
+        for (KeyValue kv : bodyParams) {
+            if (name == null && kv.key == null) {
+                result.add(kv);
+            } else if (name != null && name.equals(kv.key)) {
+                result.add(kv);
+            }
+        }
+        for (KeyValue kv : fileParams) {
+            if (name == null && kv.key == null) {
+                result.add(kv);
+            } else if (name != null && name.equals(kv.key)) {
+                result.add(kv);
+            }
+        }
+        return result;
+    }
+
     public void clearParams() {
         queryStringParams.clear();
         bodyParams.clear();
@@ -535,10 +623,29 @@ public class RequestParams {
 
     public void removeParameter(String name) {
         if (!TextUtils.isEmpty(name)) {
-            KeyValue kv = new KeyValue(name, null);
-            queryStringParams.remove(kv);
-            bodyParams.remove(kv);
-            fileParams.remove(kv);
+            Iterator<KeyValue> it = queryStringParams.iterator();
+            while (it.hasNext()) {
+                KeyValue bkv = it.next();
+                if (name.equals(bkv.key)) {
+                    it.remove();
+                }
+            }
+
+            it = bodyParams.iterator();
+            while (it.hasNext()) {
+                KeyValue bkv = it.next();
+                if (name.equals(bkv.key)) {
+                    it.remove();
+                }
+            }
+
+            it = fileParams.iterator();
+            while (it.hasNext()) {
+                KeyValue bkv = it.next();
+                if (name.equals(bkv.key)) {
+                    it.remove();
+                }
+            }
         } else {
             bodyContent = null;
         }
@@ -609,18 +716,7 @@ public class RequestParams {
                     String name = field.getName();
                     Object value = field.get(this);
                     if (value != null) {
-                        if (value instanceof List) {
-                            for (Object item : (List) value) {
-                                this.addParameter(name, item);
-                            }
-                        } else if (value.getClass().isArray()) {
-                            int len = Array.getLength(value);
-                            for (int i = 0; i < len; i++) {
-                                this.addParameter(name, Array.get(value, i));
-                            }
-                        } else {
-                            this.addParameter(name, value);
-                        }
+                        this.addParameter(name, value);
                     }
                 } catch (IllegalAccessException ex) {
                     LogUtil.e(ex.getMessage(), ex);
@@ -660,27 +756,65 @@ public class RequestParams {
         }
 
         if (asJsonContent && !bodyParams.isEmpty()) {
-            JSONObject jsonObject = new JSONObject();
-            for (KeyValue kv : bodyParams) {
-                String key = kv.key;
-                Object value = kv.value;
-                if (!TextUtils.isEmpty(key) && value != null) {
-                    try {
-                        jsonObject.put(key, value);
-                    } catch (JSONException ex) {
-                        throw new RuntimeException(ex);
-                    }
+            try {
+                JSONObject jsonObject = null;
+                if (!TextUtils.isEmpty(bodyContent)) {
+                    jsonObject = new JSONObject(bodyContent);
+                } else {
+                    jsonObject = new JSONObject();
                 }
+                params2Json(jsonObject, bodyParams);
+                bodyContent = jsonObject.toString();
+                bodyParams.clear();
+            } catch (JSONException ex) {
+                throw new RuntimeException(ex);
             }
+        }
+    }
 
-            setBodyContent(jsonObject.toString());
-            bodyParams.clear();
+    private void params2Json(final JSONObject jsonObject, final List<KeyValue> paramList) throws JSONException {
+        HashSet<String> arraySet = new HashSet<String>(paramList.size());
+        LinkedHashMap<String, JSONArray> tempData = new LinkedHashMap<String, JSONArray>(paramList.size());
+        for (int i = 0; i < paramList.size(); i++) {
+            KeyValue kv = paramList.get(i);
+            final String key = kv.key;
+            if (TextUtils.isEmpty(key)) continue;
+
+            JSONArray ja = null;
+            if (tempData.containsKey(key)) {
+                ja = tempData.get(key);
+            } else {
+                ja = new JSONArray();
+                tempData.put(key, ja);
+            }
+            ja.put(kv.value);
+
+            if (kv instanceof ArrayItem) {
+                arraySet.add(key);
+            }
+        }
+
+        for (Map.Entry<String, JSONArray> entry : tempData.entrySet()) {
+            String key = entry.getKey();
+            JSONArray ja = entry.getValue();
+            if (ja.length() > 1 || arraySet.contains(key)) {
+                jsonObject.put(key, ja);
+            } else {
+                Object value = ja.get(0);
+                jsonObject.put(key, value);
+            }
         }
     }
 
     @Override
     public String toString() {
         return getUri();
+    }
+
+    public final static class ArrayItem extends KeyValue {
+        public ArrayItem(String key, Object value) {
+            super(key, value);
+        }
     }
 
     public final static class Header extends KeyValue {

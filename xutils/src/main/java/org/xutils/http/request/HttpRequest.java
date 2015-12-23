@@ -7,8 +7,8 @@ import android.text.TextUtils;
 
 import org.xutils.cache.DiskCacheEntity;
 import org.xutils.cache.LruDiskCache;
-import org.xutils.common.KeyValue;
 import org.xutils.common.util.IOUtil;
+import org.xutils.common.util.KeyValue;
 import org.xutils.common.util.LogUtil;
 import org.xutils.ex.HttpException;
 import org.xutils.http.HttpMethod;
@@ -20,7 +20,6 @@ import org.xutils.http.cookie.DbCookieStore;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Type;
-import java.net.CookieHandler;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.HttpURLConnection;
@@ -30,6 +29,7 @@ import java.net.URLDecoder;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -49,14 +49,11 @@ public class HttpRequest extends UriRequest {
     private boolean isLoading = false;
     private InputStream inputStream = null;
     private HttpURLConnection connection = null;
+    private int responseCode = 0;
 
     // cookie manager
     private static final CookieManager COOKIE_MANAGER =
             new CookieManager(DbCookieStore.INSTANCE, CookiePolicy.ACCEPT_ALL);
-
-    static {
-        CookieHandler.setDefault(COOKIE_MANAGER);
-    }
 
     /*package*/ HttpRequest(RequestParams params, Type loadType) throws Throwable {
         super(params, loadType);
@@ -138,6 +135,19 @@ public class HttpRequest extends UriRequest {
             }
         }
 
+        if (params.isUseCookie()) {// add cookies
+            try {
+                Map<String, List<String>> singleMap =
+                        COOKIE_MANAGER.get(url.toURI(), new HashMap<String, List<String>>(0));
+                List<String> cookies = singleMap.get("Cookie");
+                if (cookies != null) {
+                    connection.setRequestProperty("Cookie", TextUtils.join(";", cookies));
+                }
+            } catch (Throwable ex) {
+                LogUtil.e(ex.getMessage(), ex);
+            }
+        }
+
         {// add headers
             List<RequestParams.Header> headers = params.getHeaders();
             if (headers != null) {
@@ -187,10 +197,21 @@ public class HttpRequest extends UriRequest {
             }
         }
 
+        if (params.isUseCookie()) { // save cookies
+            try {
+                Map<String, List<String>> headers = connection.getHeaderFields();
+                if (headers != null) {
+                    COOKIE_MANAGER.put(url.toURI(), headers);
+                }
+            } catch (Throwable ex) {
+                LogUtil.e(ex.getMessage(), ex);
+            }
+        }
+
         // check response code
-        int code = connection.getResponseCode();
-        if (code >= 300) {
-            HttpException httpException = new HttpException(code, this.getResponseMessage());
+        responseCode = connection.getResponseCode();
+        if (responseCode >= 300) {
+            HttpException httpException = new HttpException(responseCode, this.getResponseMessage());
             try {
                 httpException.setResult(IOUtil.readStr(this.getInputStream(), params.getCharset()));
             } catch (Throwable ignored) {
@@ -243,11 +264,11 @@ public class HttpRequest extends UriRequest {
             if (HttpMethod.permitsCache(params.getMethod())) {
                 Date lastModified = cacheEntity.getLastModify();
                 if (lastModified.getTime() > 0) {
-                    params.addHeader("If-Modified-Since", toGMTString(lastModified));
+                    params.setHeader("If-Modified-Since", toGMTString(lastModified));
                 }
                 String eTag = cacheEntity.getEtag();
                 if (!TextUtils.isEmpty(eTag)) {
-                    params.addHeader("If-None-Match", eTag);
+                    params.setHeader("If-None-Match", eTag);
                 }
             }
             return loader.loadFromCache(cacheEntity);
@@ -258,8 +279,8 @@ public class HttpRequest extends UriRequest {
 
     @Override
     public void clearCacheHeader() {
-        params.addHeader("If-Modified-Since", null);
-        params.addHeader("If-None-Match", null);
+        params.setHeader("If-Modified-Since", null);
+        params.setHeader("If-None-Match", null);
     }
 
     @Override
@@ -308,7 +329,7 @@ public class HttpRequest extends UriRequest {
     @Override
     public int getResponseCode() throws IOException {
         if (connection != null) {
-            return connection.getResponseCode();
+            return responseCode;
         } else {
             if (this.getInputStream() != null) {
                 return 200;
@@ -362,11 +383,11 @@ public class HttpRequest extends UriRequest {
             expiration = connection.getExpiration();
         }
 
-        if (expiration <= 0) {
+        if (expiration <= 0L && params.getCacheMaxAge() > 0L) {
             expiration = System.currentTimeMillis() + params.getCacheMaxAge();
         }
 
-        if (expiration <= 0) {
+        if (expiration <= 0L) {
             expiration = Long.MAX_VALUE;
         }
         return expiration;

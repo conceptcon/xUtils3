@@ -73,10 +73,9 @@ import java.util.concurrent.Executor;
                             TaskProxy.this.onCancelled(cex);
                         } catch (Throwable ex) {
                             TaskProxy.this.onError(ex, false);
+                        } finally {
+                            TaskProxy.this.onFinished();
                         }
-
-                        // finished
-                        TaskProxy.this.onFinished();
                     }
                 });
         this.executor.execute(runnable);
@@ -166,8 +165,8 @@ import java.util.concurrent.Executor;
             super(Looper.getMainLooper());
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public void handleMessage(Message msg) {
             if (msg.obj == null) {
                 throw new IllegalArgumentException("msg must not be null");

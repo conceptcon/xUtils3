@@ -72,6 +72,10 @@ public class FileLoader extends Loader<File> {
         BufferedOutputStream bos = null;
         try {
             targetFile = new File(tempSaveFilePath);
+            if (targetFile.isDirectory()) {
+                // 防止文件正在写入时, 父文件夹被删除, 继续写入时造成偶现文件节点异常问题.
+                IOUtil.deleteFileOrDir(targetFile);
+            }
             if (!targetFile.exists()) {
                 File dir = targetFile.getParentFile();
                 if (dir.exists() || dir.mkdirs()) {
@@ -202,7 +206,7 @@ public class FileLoader extends Loader<File> {
                     }
                 }
                 // retry 时需要覆盖RANGE参数
-                params.addHeader("RANGE", "bytes=" + range + "-");
+                params.setHeader("RANGE", "bytes=" + range + "-");
             }
 
             if (progressHandler != null && !progressHandler.updateProgress(0, 0, false)) {

@@ -4,8 +4,8 @@ package org.xutils.http.body;
 import android.text.TextUtils;
 
 import org.xutils.common.Callback;
-import org.xutils.common.KeyValue;
 import org.xutils.common.util.IOUtil;
+import org.xutils.common.util.KeyValue;
 import org.xutils.http.ProgressHandler;
 
 import java.io.File;
@@ -214,7 +214,7 @@ public class MultipartBody implements ProgressBody {
         StringBuilder result = new StringBuilder("Content-Type: ");
         if (TextUtils.isEmpty(contentType)) {
             if (value instanceof String) {
-                contentType = "text/plain; charset:" + charset;
+                contentType = "text/plain; charset=" + charset;
             } else {
                 contentType = "application/octet-stream";
             }

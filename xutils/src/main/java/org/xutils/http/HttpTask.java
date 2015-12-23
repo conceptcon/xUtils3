@@ -8,6 +8,8 @@ import org.xutils.common.util.IOUtil;
 import org.xutils.common.util.LogUtil;
 import org.xutils.common.util.ParameterizedTypeUtil;
 import org.xutils.ex.HttpException;
+import org.xutils.ex.HttpRedirectException;
+import org.xutils.http.app.HttpRetryHandler;
 import org.xutils.http.app.InterceptRequestListener;
 import org.xutils.http.app.RedirectHandler;
 import org.xutils.http.app.RequestTracker;
@@ -28,9 +30,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class HttpTask<ResultType> extends AbsTask<ResultType> implements ProgressHandler {
 
     // 请求相关
+    private RequestParams params;
     private UriRequest request;
     private RequestWorker requestWorker;
-    private final RequestParams params;
     private final Executor executor;
     private final Callback.CommonCallback<ResultType> callback;
 
@@ -250,6 +252,11 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
                 }
 
                 if (prepareCallback != null) {
+
+                    if (this.isCancelled()) {
+                        throw new Callback.CancelledException("cancelled before request");
+                    }
+
                     try {
                         result = (ResultType) prepareCallback.prepare(rawResult);
                     } finally {
@@ -267,6 +274,9 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
                 if (this.isCancelled()) {
                     throw new Callback.CancelledException("cancelled after request");
                 }
+            } catch (HttpRedirectException redirectEx) {
+                retry = true;
+                LogUtil.w("Http Redirect:" + params.getUri());
             } catch (Throwable ex) {
                 if (this.request.getResponseCode() == 304) { // disk cache is valid.
                     return null;
@@ -442,6 +452,7 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
                 total = current;
             }
             if (forceUpdateUI) {
+                lastUpdateTime = System.currentTimeMillis();
                 this.update(FLAG_PROGRESS, total, current, request.isLoading());
             } else {
                 long currTime = System.currentTimeMillis();
@@ -485,7 +496,7 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
                             && !HttpTask.this.isCancelled()) {
                         synchronized (sCurrFileLoadCount) {
                             try {
-                                sCurrFileLoadCount.wait();
+                                sCurrFileLoadCount.wait(100);
                             } catch (Throwable ignored) {
                             }
                         }
@@ -519,7 +530,8 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
             } catch (Throwable ex) {
                 this.ex = ex;
                 if (ex instanceof HttpException) {
-                    int errorCode = ((HttpException) ex).getCode();
+                    HttpException httpEx = (HttpException) ex;
+                    int errorCode = httpEx.getCode();
                     if (errorCode == 301 || errorCode == 302) {
                         RedirectHandler redirectHandler = params.getRedirectHandler();
                         if (redirectHandler != null) {
@@ -529,35 +541,10 @@ public class HttpTask<ResultType> extends AbsTask<ResultType> implements Progres
                                     if (redirectParams.getMethod() == null) {
                                         redirectParams.setMethod(params.getMethod());
                                     }
-                                    // 新任务执行时有可能会再次重定向
-                                    HttpTask<ResultType> task = new HttpTask<ResultType>(
-                                            redirectParams,
-                                            HttpTask.this,
-                                            new Callback.TypedCallback<ResultType>() {
-                                                @Override
-                                                public Type getResultType() {
-                                                    return loadType;
-                                                }
-
-                                                @Override
-                                                public void onSuccess(ResultType result) {
-                                                }
-
-                                                @Override
-                                                public void onError(Throwable ex, boolean isOnCallback) {
-                                                    RequestWorker.this.ex = ex;
-                                                }
-
-                                                @Override
-                                                public void onCancelled(CancelledException cex) {
-                                                }
-
-                                                @Override
-                                                public void onFinished() {
-                                                }
-                                            });
-                                    this.result = x.task().startSync(task);
-                                    this.ex = null;
+                                    // 开始重定向请求
+                                    HttpTask.this.params = redirectParams;
+                                    HttpTask.this.request = initRequest();
+                                    this.ex = new HttpRedirectException(errorCode, httpEx.getMessage(), httpEx.getResult());
                                 }
                             } catch (Throwable throwable) {
                                 this.ex = ex;

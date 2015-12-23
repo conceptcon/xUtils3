@@ -11,9 +11,7 @@
 
 #### 使用Gradle构建时添加一下依赖即可:
 ```javascript
-compile 'org.xutils:xutils:3.1.+'
-// or
-// compile 'org.xutils:xutils:3.1.2'
+compile 'org.xutils:xutils:3.1.20'
 ```
 ##### 如果使用eclipse可以 [点击这里下载aar文件](http://dl.bintray.com/wyouflf/maven/org/xutils/xutils/), 然后用zip解压, 取出jar包和so文件.
 ##### 混淆配置参考示例项目sample的配置
@@ -285,6 +283,7 @@ jclassRef = jniEnv->FindClass(...);
 jclass temp = jniEnv->FindClass(...);
 jclassRef = (jclass)jniEnv->NewGlobalRef(temp);
 jniEnv->DeleteLocalRef(temp);
+// 其他jni代码修改见: http://my.oschina.net/u/1171837/blog/533153
 ```
 
 ----

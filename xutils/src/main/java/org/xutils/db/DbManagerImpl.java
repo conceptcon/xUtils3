@@ -457,13 +457,21 @@ public final class DbManagerImpl implements DbManager {
 
     private void createTableIfNotExist(TableEntity<?> table) throws DbException {
         if (!table.tableIsExist()) {
-            SqlInfo sqlInfo = SqlInfoBuilder.buildCreateTableSqlInfo(table);
-            execNonQuery(sqlInfo);
-            String execAfterTableCreated = table.getOnCreated();
-            if (!TextUtils.isEmpty(execAfterTableCreated)) {
-                execNonQuery(execAfterTableCreated);
+            synchronized (table.getClass()) {
+                if (!table.tableIsExist()) {
+                    SqlInfo sqlInfo = SqlInfoBuilder.buildCreateTableSqlInfo(table);
+                    execNonQuery(sqlInfo);
+                    String execAfterTableCreated = table.getOnCreated();
+                    if (!TextUtils.isEmpty(execAfterTableCreated)) {
+                        execNonQuery(execAfterTableCreated);
+                    }
+                    table.setCheckedDatabase(true);
+                    TableCreateListener listener = this.daoConfig.getTableCreateListener();
+                    if (listener != null) {
+                        listener.onTableCreate(this, table);
+                    }
+                }
             }
-            table.setCheckedDatabase(true);
         }
     }
 
@@ -568,7 +576,13 @@ public final class DbManagerImpl implements DbManager {
         } catch (Throwable e) {
             throw new DbException(e);
         } finally {
-            IOUtil.closeQuietly(statement);
+            if (statement != null) {
+                try {
+                    statement.releaseReference();
+                } catch (Throwable ex) {
+                    LogUtil.e(ex.getMessage(), ex);
+                }
+            }
         }
     }
 

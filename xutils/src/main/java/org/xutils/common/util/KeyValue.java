@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-package org.xutils.common;
+package org.xutils.common.util;
 
 public class KeyValue {
     public final String key;
@@ -42,5 +42,10 @@ public class KeyValue {
     @Override
     public int hashCode() {
         return key != null ? key.hashCode() : 0;
+    }
+
+    @Override
+    public String toString() {
+        return "KeyValue{" + "key='" + key + '\'' + ", value=" + value + '}';
     }
 }
